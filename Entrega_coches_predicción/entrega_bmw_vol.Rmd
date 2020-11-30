@@ -1,0 +1,248 @@
+---
+title: "Entrega_empresas_coches"
+author: "Matias Corredoira"
+date: "29/11/2020"
+output: html_document
+---
+
+
+
+## Practica:
+Para este caso realizaremos los punto s 1 y 3 en los que se estimará un modelo Garch para BMW y se planteará un modelo mensual para ambos activos
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Cargamos las librerías necesarias para el trabajo
+
+```{r cars,message=FALSE}
+library(quantmod) 
+library(forecast)
+library(fGarch)
+library(vars)
+```
+
+
+##### Multiplicador de Lagrange para el efecto ARCH de una serie de tiempo
+
+rtn: time series
+m: selected AR order
+TSAY(2013)
+
+```{r pressure, echo=FALSE}
+
+archTest <- function(rtn,m=10){
+
+  y=(rtn-mean(rtn))^2
+  T=length(rtn)
+  atsq=y[(m+1):T]
+  x=matrix(0,(T-m),m)
+  for (i in 1:m){
+    x[,i]=y[(m+1-i):(T-i)]
+  }
+  md=lm(atsq~x)
+  summary(md)
+}
+```
+
+
+
+
+Su aplicación se usará para comprobar la necesidad de estimación de un modelo GARCH
+
+#### Crgamos los datos y los marcamos como procede.
+
+```{r,message=FALSE}
+sSymbol="BMW.DE"
+# Recogemos datos 
+mData<-getSymbols(sSymbol ,from="2014-01-01",to="2020-01-01",auto.assign=FALSE)
+#Realizamos su definición
+xData=Ad(mData)
+# Mediaa arirmetica
+dRentCont=dailyReturn(xData,type='log',leading=FALSE)
+# Eliminamos valorea NA
+dRentCont=na.exclude(dRentCont)
+```
+
+##### Se grafican las rentabilidades pertenecientes a los distintos años.
+
+```{r}
+plot.zoo(cbind(xData,dRentCont),main=paste(sSymbol," y  Rentabilidad"),xlab="años",ylab=c("Precio","rentabilidad"))
+grid(lwd=2)
+```
+
+
+
+##### Graficamos volatilidad de GARP
+
+```{r}
+# Graficamos aplicandoles el cuadrado
+plot.zoo(cbind(Ad(mData),dRentCont,dRentCont^2),main=paste(sSymbol," y  Rentabilidad"),xlab="años",ylab=c("Precio","rentabilidad","Volatilidad"))
+```
+
+##### Realizamos el test sobre la media
+```{r,warning=FALSE}
+
+t.test(dRentCont)
+```
+
+### ACF & PACF
+ACF es una función de autocorrelación (completa) que nos da valores de autocorrelación de cualquier serie con sus valores retardados.
+El PACF es una función de autocorrelación parcial. Básicamente, en lugar de encontrar correlaciones de presente con desfases como el ACF, encuentra una correlación de los residuos (que permanece después de eliminar los efectos que ya se explican por los desfases anteriores) con el siguiente valor de desfase, por lo tanto, "parcial" y no "completa", ya que eliminamos las variaciones ya encontradas antes de encontrar la siguiente correlación.
+
+
+```{r}
+#ACF & PACF 
+# VolProxy=abs(dRentCont) # absolute value
+VolProxy=dRentCont^2 
+```
+
+Para determinar si existen efectos GARCH en la serie de residuos del modelo,
+realizamos las pruebas de hipótesis: Ljung-Box y Multiplicador de Lagrange para efectos
+GARCH. El resultado de estas pruebas, nos indicará si es necesario realizar la estimación
+de un modelo GARCH.
+
+
+```{r,message=FALSE}
+#ACF y PACF
+tsdisplay(VolProxy) 
+
+#Ljung-Box Test 
+Box.test(VolProxy,lag=10,  type="Lj")
+Box.test(VolProxy,lag=20,  type="Lj")
+Box.test(VolProxy,lag=40,  type="Lj")
+
+#LM test
+archTest(dRentCont,20)
+```
+
+### ARCH(1)
+El modelo ARCH es la primera especificación y desarrollo del modelo
+
+```{r}
+#ARCH(1)
+m1=garchFit(~1+garch(1,0),data=dRentCont,trace=F) # Fit an ARCH(1) model
+summary(m1)
+resi=residuals(m1,standardize=T) #residuals
+resi=xts(resi,order.by=index(dRentCont)) #residuals as xts
+tsdisplay(resi^2) #acf pacf residuals
+```
+
+### GARCH (1,1)
+Metodo generalizado y sin restricciones para la estimacion de los parametros ARCH con infinitos retardos
+
+```{r}
+#GARCH(1,1)
+m2=garchFit(~1+garch(1,1),data=dRentCont,trace=F) # Fit an GARCH(1,1) model
+summary(m2)
+```
+
+##### Representamos los residuos
+
+```{r}
+resi=residuals(m2,standardize=T) #residuals
+resi=xts(resi,order.by=index(dRentCont)) #residuals as xts
+tsdisplay(resi^2) #acf pacf residuals
+plot(m2,which=13)
+```
+
+
+```{r,warning=FALSE,message=FALSE}
+m3=garchFit(~1+garch(1,1),data=dRentCont,trace=F,cond.dist="std")
+summary(m3)
+plot(m3,which =13)
+```
+
+
+# Volatilidad
+la volatilidad es una medida de cuánto la rentabilidad fluctúa alrededor de su media. Es por tanto una medida del riesgo.
+Por lo tanto, es importante, poder calcular esta volatilidad en cualquier instante, para analizar cómo varía con el tiempo y para predecir sus valores futuros.
+
+```{r}
+v1=volatility(m3)  
+v1=xts(v1,order.by=index(dRentCont))
+plot(sqrt(252)*v1)
+```
+
+Estandarizamos los residuos y los plasmamos
+
+```{r}
+resi=residuals(m3,standardize=T) # Standardized residuals
+resi=xts(resi,order.by=index(dRentCont)) # Standardized residuals as XTS
+tsdisplay(resi^2) #acf pacf residuals
+plot(resi)
+```
+# Por ultimo predecimos la volatilidad de nuestro modelo, es decir el riesgo
+
+```{r}
+predict(m3) #forecast volatility
+predict(m3, n.ahead = 10, plot=TRUE, crit_val=2) #plot with 2*standard error
+predict(m3,n.ahead=20,plot=TRUE,conf=.9,nx=100) # plot 100 data with 90% confidence
+```
+
+
+## Modelo VAR
+
+
+```{r,warning=FALSE}
+bmw=getSymbols("BMW.DE",env=NULL)
+vol=getSymbols("VWAGY",env=NULL)
+```
+### Marcamos rentabilidad mensual
+
+```{r,warning=FALSE}
+rbmw=monthlyReturn(bmw[,6])              
+rvol=monthlyReturn(vol[,6])
+```
+
+
+```{r}
+
+vY=cbind(rbmw,rvol)
+colnames(vY)=c("BMW","VOL")
+vY=na.omit(vY)
+```
+
+### Seleccionamos modelo
+
+```{r}
+VARselect(vY)
+```
+### Estimación
+
+```{r}
+
+model.var=VAR(vY)
+summary(model.var)
+model.var1=VAR(vY,type="none")
+summary(model.var1)
+```
+
+
+### Causalidad de granger
+
+```{r,warning=FALSE}
+causality(model.var1)
+```
+### Respuesta al impulso
+
+```{r}
+model.ri=irf(model.var1)
+model.ri
+plot(model.ri)
+```
+
+### Prediccion
+
+```{r}
+#prediccion
+predict(model.var1, n.ahead = 8, ci = 0.95) 
+
+```
+A partir de los datos concluimos que no se descarta la existencia de causalidad entre los datos de las series temporales de ambas empresas.
+
+
+
+
+
